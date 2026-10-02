@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.local
+.env*.local
+.next/
+apps/web/.next/
+apps/web/node_modules/
+apps/ai-engine/venv/
+apps/ai-engine/__pycache__/
+*.pyc
+.DS_Store

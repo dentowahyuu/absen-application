@@ -1,0 +1,87 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: absen-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-absen}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-absen}
+      POSTGRES_DB: ${POSTGRES_DB:-absen_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./config/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-absen} -d ${POSTGRES_DB:-absen_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: absen-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ai-engine:
+    build: ./apps/ai-engine
+    container_name: absen-ai-engine
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist the downloaded InsightFace model weights across container
+      # restarts/rebuilds instead of re-downloading (~280MB) from GitHub
+      # every time the container starts fresh.
+      - ai_models_cache:/root/.insightface
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  web:
+    build: ./apps/web
+    container_name: absen-web
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      ai-engine:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-absen}:${POSTGRES_PASSWORD:-absen}@postgres:5432/${POSTGRES_DB:-absen_db}
+      MINIO_ENDPOINT: minio
+      MINIO_PORT_INTERNAL: "9000"
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET_EVIDENCE: attendance-evidence
+      MINIO_BUCKET_PROFILES: employee-profiles
+      AI_ENGINE_URL: http://ai-engine:8000
+      FACE_MATCH_THRESHOLD: ${FACE_MATCH_THRESHOLD:-0.5}
+      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:?ADMIN_SESSION_SECRET must be set in .env}
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:
+  minio_data:
+  ai_models_cache:
